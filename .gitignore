@@ -1,10 +1,14 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*$py.class
+.venv/
+.python-version
 
-# Virtual environments
+# IDEs
+.idea/
+.vscode/
+
+# Environment & Secrets
+.env
 .venv
