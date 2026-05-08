@@ -1,7 +1,12 @@
 """
-The Critic — AI-powered feedback assistant
-Connected to Groq via LangChain (get_roast_response)
-Run with: uv run streamlit run app.py
+app.py — Streamlit entry point for The Critic.
+
+Handles page configuration, CSS injection, session state management,
+and the main chat interaction loop. The UI communicates with the
+LangChain-powered backend via `get_roast_response`.
+
+Usage:
+    uv run streamlit run app.py
 """
 
 import uuid
@@ -15,7 +20,7 @@ st.set_page_config(
     page_title="The Critic",
     page_icon="🎭",
     layout="centered",
-    initial_sidebar_state="collapsed",   # sidebar hidden by default
+    initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────────────
@@ -282,20 +287,25 @@ div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button:hover 
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
+# messages: full conversation history rendered in the chat view.
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# roasted_items: accumulates every user confession passed into the system prompt.
 if "roasted_items" not in st.session_state:
     st.session_state.roasted_items = []
 
+# session_id: unique key used to look up the in-memory LangChain message history.
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
+# quick_prompt: stores a pill-button selection so it survives the rerun cycle.
 if "quick_prompt" not in st.session_state:
     st.session_state.quick_prompt = None
 
 
 def clear_chat():
+    """Reset all session state and generate a fresh session identifier."""
     clear_session_history(st.session_state.session_id)
     st.session_state.messages = []
     st.session_state.roasted_items = []
@@ -303,6 +313,13 @@ def clear_chat():
 
 
 def render_bubble(role: str, content: str):
+    """
+    Render a single chat message as a styled HTML bubble.
+
+    Args:
+        role: Either "user" or "assistant".
+        content: The message body to display inside the bubble.
+    """
     if role == "user":
         st.markdown(
             f'<div class="bubble-user">'
@@ -328,7 +345,7 @@ col_title, col_btn = st.columns([5, 1])
 with col_title:
     st.markdown('<div class="app-title">The Critic</div>', unsafe_allow_html=True)
 with col_btn:
-    st.markdown('<div style="height:1.6rem"></div>', unsafe_allow_html=True)  # vertical align
+    st.markdown('<div style="height:1.6rem"></div>', unsafe_allow_html=True)  # vertical alignment spacer
     if st.button("↺ Restart", key="restart_btn"):
         clear_chat()
         st.rerun()
@@ -360,7 +377,7 @@ if not st.session_state.messages:
             st.session_state.quick_prompt = text
             st.rerun()
 else:
-    # Render the full saved history
+    # Render the full conversation history from session state.
     for msg in st.session_state.messages:
         render_bubble(msg["role"], msg["content"])
 
@@ -369,23 +386,24 @@ else:
 # CHAT INPUT
 # ─────────────────────────────────────────────
 _typed = st.chat_input("Confess something you like…")
+
+# Pill button clicks are stored across reruns; prefer them over typed input.
 prompt = st.session_state.pop("quick_prompt", None) or _typed
 
 if prompt:
 
-    # 1. Save & display the user message immediately as a live placeholder
-    #    (rendered BELOW the history loop above, so no duplication)
+    # Display the user message immediately without waiting for the bot reply.
     st.session_state.messages.append({"role": "user", "content": prompt})
     render_bubble("user", prompt)
 
-    # 2. Typing indicator placeholder
+    # Show an animated typing indicator while the backend processes the request.
     typing_ph = st.empty()
     typing_ph.markdown(
         '<div class="typing-wrap"><span></span><span></span><span></span></div>',
         unsafe_allow_html=True,
     )
 
-    # 3. Call the backend
+    # Call the backend and handle any unexpected errors gracefully.
     try:
         reply = get_roast_response(
             user_input=prompt,
@@ -396,8 +414,7 @@ if prompt:
     except Exception as e:
         reply = f"⚠️ Something went wrong. Please try again."
 
-    # 4. Save reply and rerun — the history loop will render everything
-    #    cleanly from session_state, with no duplicates.
+    # Clear the indicator, persist the reply, then rerun to re-render history cleanly.
     typing_ph.empty()
     st.session_state.messages.append({"role": "assistant", "content": reply})
     st.rerun()

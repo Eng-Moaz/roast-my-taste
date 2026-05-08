@@ -1,3 +1,12 @@
+"""
+bot.py — LangChain backend for The Critic.
+
+Manages the LLM client, session history, internet search integration,
+and the main response pipeline. Each call to `get_roast_response` runs
+a real-time web search, injects the results ephemerally into the prompt,
+and stores only the clean user/AI exchange in the in-memory history.
+"""
+
 import os
 from dotenv import load_dotenv
 
@@ -54,18 +63,36 @@ _chat_histories: dict[str, "InMemoryHistory"] = {}
 
 
 class InMemoryHistory(BaseChatMessageHistory):
+    """
+    Simple in-memory implementation of LangChain's BaseChatMessageHistory.
+
+    Stores a flat list of HumanMessage and AIMessage objects for a single
+    session. Intentionally lightweight — history is scoped to the
+    lifetime of the Streamlit process.
+    """
 
     def __init__(self):
         self.messages = []
 
     def add_messages(self, messages):
+        """Append one or more messages to the history."""
         self.messages.extend(messages)
 
     def clear(self):
+        """Remove all messages from the history."""
         self.messages = []
 
 
 def _get_session_history(session_id: str) -> InMemoryHistory:
+    """
+    Retrieve the message history for a given session, creating it if absent.
+
+    Args:
+        session_id: A unique string identifier for the user's session.
+
+    Returns:
+        The InMemoryHistory instance associated with that session.
+    """
     if session_id not in _chat_histories:
         _chat_histories[session_id] = InMemoryHistory()
     return _chat_histories[session_id]
@@ -88,14 +115,22 @@ _llm = ChatGroq(
 
 def _build_search_query(user_input: str, history: list) -> str:
     """
-    Build a search query from the current user input + the previous user message.
-    With Serper (Google Search), we don't need LLM-generated queries — Google
-    handles semantic understanding natively. We just need to include enough
-    context so that pronouns (they, she, he) are resolved by the surrounding words.
+    Construct a search query from the current user input and recent history.
+
+    Appends the most recent prior user message to the current input so that
+    vague pronoun references (e.g. "what did she release?") are resolved by
+    Google's own semantic understanding rather than requiring an extra LLM call.
+
+    Args:
+        user_input: The raw text submitted by the user in the current turn.
+        history: The list of HumanMessage / AIMessage objects for this session.
+
+    Returns:
+        A search query string capped at 300 characters.
     """
     query = user_input.strip()
 
-    # Append the last user message for pronoun resolution context
+    # Walk back through the last six messages to find the previous user turn.
     for msg in reversed(history[-6:]):
         if isinstance(msg, HumanMessage):
             previous = msg.content.strip()
@@ -108,37 +143,53 @@ def _build_search_query(user_input: str, history: list) -> str:
 
 def get_roast_response(user_input: str, roasted_items: list[str], session_id: str) -> str:
     """
-    Returns the bot's reply string.
+    Generate a roast reply for the given user input.
+
+    The pipeline runs as follows:
+    1. Validate and sanitize the raw input.
+    2. Build a context-enriched search query and fetch live web results.
+    3. Assemble the full prompt with the system persona, stored history,
+       and the ephemeral search context injected into the current turn.
+    4. Invoke the LLM and persist only the clean exchange (no search data)
+       to the session history.
+
+    Args:
+        user_input: The message submitted by the user.
+        roasted_items: List of previous confessions accumulated this session.
+        session_id: Unique identifier for the user's session history.
+
+    Returns:
+        The bot's reply as a plain string.
     """
-    # Validate the user input first to handle unexpected/wrong inputs gracefully
     is_valid, processed_input = validate_user_input(user_input)
     if not is_valid:
-        return processed_input  # Return the graceful fallback message directly
+        return processed_input
 
     history = _get_session_history(session_id).messages
 
-    # Build a context-aware search query so vague follow-ups still find results
+    # Build a context-aware search query so vague follow-ups still resolve correctly.
     search_query = _build_search_query(user_input, history)
 
-    # Search the internet (fresh every turn, using our safe robust wrapper)
+    # Fetch fresh search results for every turn.
     search_context = execute_safe_search(search_query)
 
     formatted_items = format_items_for_prompt(roasted_items)
 
-    # Build the prompt manually — we manage history ourselves so that ONLY
-    # the clean user_input (without search dumps) gets stored in memory.
+    # Construct the message list manually so we control exactly what gets stored.
+    # The search dump is injected ephemerally into the current human turn only
+    # and is never written to the persistent history.
     messages = [
         ("system", _SYSTEM_PROMPT.format(roasted_items=formatted_items)),
     ]
 
-    # Inject the stored history (clean human/AI pairs only)
+    # Replay the stored history as clean human/AI message pairs.
     for msg in history:
         if isinstance(msg, HumanMessage):
             messages.append(("human", msg.content))
         elif isinstance(msg, AIMessage):
             messages.append(("ai", msg.content))
 
-    # Current turn: user_input + fresh search context (ephemeral, NOT stored)
+    # Append the current turn with search context attached.
     messages.append(("human", (
         f"User says: {user_input}\n\n"
         f"Internet search results (treat this as ground truth — especially for recent events, "
@@ -151,7 +202,8 @@ def get_roast_response(user_input: str, roasted_items: list[str], session_id: st
     chain = prompt | _llm
     response = chain.invoke({})
 
-    # Manually save ONLY the clean exchange (no search dump) to history
+    # Save only the clean exchange to history — the search context is excluded
+    # to prevent stale data from being treated as established fact in future turns.
     hist = _get_session_history(session_id)
     hist.add_messages([
         HumanMessage(content=user_input),
@@ -162,5 +214,11 @@ def get_roast_response(user_input: str, roasted_items: list[str], session_id: st
 
 
 def clear_session_history(session_id: str) -> None:
+    """
+    Delete the stored message history for the given session.
+
+    Args:
+        session_id: The session identifier whose history should be removed.
+    """
     if session_id in _chat_histories:
         del _chat_histories[session_id]

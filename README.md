@@ -86,9 +86,3 @@ roast-my-taste/
 4. **Clean Memory**:
    To prevent the LLM from treating old search dumps as established facts, only the raw user input and the AI's direct response are saved to the persistent `InMemoryHistory`.
 
----
-
-## 📝 Future Improvements
-
-- Add a dedicated tracking metric for "Roast Severity" to dynamically end the chat if the user's taste is deemed *too* terrible.
-- Expand quick-prompts to be dynamically generated based on trending Twitter/X topics.

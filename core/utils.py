@@ -1,10 +1,23 @@
+"""
+utils.py — Shared utility functions for The Critic.
+
+Provides input validation, prompt formatting helpers, and the
+web search wrapper used by the response pipeline in bot.py.
+"""
+
 import os
 from langchain_community.utilities import GoogleSerperAPIWrapper
 
-def format_items_for_prompt(items):
+def format_items_for_prompt(items: list) -> str:
     """
-    Format a list of previously roasted items into a bulleted string for the prompt.
-    If the list is empty, return a string indicating there are no items yet.
+    Format a list of previously roasted items into a bulleted string.
+
+    Args:
+        items: A list of confession strings accumulated during the session.
+
+    Returns:
+        A newline-separated bullet list, or a placeholder string if the list
+        is empty.
     """
     if not items:
         return "(No past crimes recorded yet)"
@@ -12,11 +25,20 @@ def format_items_for_prompt(items):
     return "\n".join(f"- {item}" for item in items)
 
 
-def validate_user_input(user_input):
+def validate_user_input(user_input: str) -> tuple[bool, str]:
     """
-    Validates and sanitizes the user's input to handle unexpected or empty inputs gracefully.
-    Returns a tuple: (is_valid, sanitized_input_or_fallback_message).
-    This ensures the chatbot does not break on bad inputs and provides a natural conversational fallback.
+    Validate and sanitize raw user input before it reaches the LLM.
+
+    Rejects inputs that are empty, too short to be meaningful, or
+    excessively long. Returns an in-character fallback message when
+    validation fails so the user still receives a natural response.
+
+    Args:
+        user_input: The raw string submitted by the user.
+
+    Returns:
+        A tuple of (is_valid, result) where `result` is either the
+        sanitized input string on success or a fallback message on failure.
     """
     clean_input = user_input.strip()
 
@@ -32,13 +54,21 @@ def validate_user_input(user_input):
     return True, clean_input
 
 
-def execute_safe_search(search_query, max_retries=2):
+def execute_safe_search(search_query: str, max_retries: int = 2) -> str:
     """
-    Executes a Google search via the Serper API using LangChain's GoogleSerperAPIWrapper.
-    Serper is far more reliable and accurate than DuckDuckGo — it returns real Google results
-    with no event-loop conflicts, no rate-limiting surprises, and proper structured output.
-    Requires SERPER_API_KEY in the .env file (free tier: 2,500 searches/month at serper.dev).
-    Falls back gracefully if the search fails.
+    Execute a Google search via the Serper API and return a text summary.
+
+    Retries the request up to `max_retries` times on failure. Returns a
+    graceful fallback string if the API key is absent or all attempts fail,
+    so the response pipeline can continue without raising an exception.
+
+    Args:
+        search_query: The query string to submit to the search API.
+        max_retries: Number of attempts before giving up (default: 2).
+
+    Returns:
+        A string containing the search result summary, or a fallback message
+        if the search could not be completed.
     """
     serper_key = os.getenv("SERPER_API_KEY", "")
     if not serper_key:
@@ -48,12 +78,12 @@ def execute_safe_search(search_query, max_retries=2):
         try:
             search = GoogleSerperAPIWrapper(
                 serper_api_key=serper_key,
-                k=8,  # Number of results to return
+                k=8,
             )
             result = search.run(search_query)
             if result and len(result.strip()) >= 30:
                 return result
         except Exception as e:
-            print(f"[Search Attempt {attempt + 1} Failed] {type(e).__name__}: {e}")
+            print(f"[Search attempt {attempt + 1} failed] {type(e).__name__}: {e}")
 
     return "No internet context found (search failed)."
